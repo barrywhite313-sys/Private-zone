@@ -44,6 +44,7 @@ function seedData() {
       { id: uid(), userId: sofia.id, text: 'Photo prints are back in the shop. (Demo post)', imageUrl: '', videoUrl: '', createdAt: now(), isDemo: true },
     ],
     likes: [], comments: [], saved: [], hidden: [], shares: [],
+    reactions: [], pollVotes: [], events: [], rsvps: [],
     stories: [
       { id: uid(), userId: maya.id, text: 'Demo story: Sunday dinner prep', imageUrl: '', createdAt: now(), isDemo: true },
       { id: uid(), userId: dre.id, text: 'Demo story: courtside', imageUrl: '', createdAt: now(), isDemo: true },
@@ -118,6 +119,49 @@ function areFriends(a, b) {
   return db.friends.some(f => f.status === 'accepted' && ((f.fromId === a && f.toId === b) || (f.fromId === b && f.toId === a)));
 }
 function chatIdFor(a, b) { return [a, b].sort().join('__'); }
+
+// ---------- new features: reactions, polls, explore, events ----------
+// Defensive: live DBs created before these collections existed may lack them.
+const REACTION_EMOJIS = ['❤️', '😂', '🔥', '👍', '😮', '😢'];
+function arr(name) { if (!Array.isArray(db[name])) db[name] = []; return db[name]; }
+function reactionCounts(postId) {
+  const counts = {};
+  for (const r of arr('reactions').filter(x => x.postId === postId)) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+  return counts;
+}
+function pollInfo(post, userId) {
+  if (!Array.isArray(post.pollOptions) || !post.pollOptions.length) return null;
+  const votes = arr('pollVotes').filter(v => v.postId === post.id);
+  const total = votes.length;
+  const mine = votes.find(v => v.userId === userId);
+  return {
+    options: post.pollOptions.map((text, optionIndex) => {
+      const count = votes.filter(v => v.optionIndex === optionIndex).length;
+      return { optionIndex, text, votes: count, percent: total ? Math.round(count * 100 / total) : 0 };
+    }),
+    totalVotes: total,
+    myVote: mine ? mine.optionIndex : null,
+  };
+}
+function enrichPost(post, userId) {
+  const likes = db.likes.filter(l => l.postId === post.id).length;
+  const comments = db.comments.filter(c => c.postId === post.id).map(c => ({ ...c, author: publicUser(db.users.find(x => x.id === c.userId)) }));
+  const shares = db.shares.filter(s => s.postId === post.id).length;
+  const mine = arr('reactions').find(r => r.postId === post.id && r.userId === userId);
+  return {
+    ...post,
+    author: publicUser(db.users.find(x => x.id === post.userId)),
+    likes,
+    likedByMe: db.likes.some(l => l.postId === post.id && l.userId === userId),
+    savedByMe: db.saved.some(s => s.postId === post.id && s.userId === userId),
+    shares,
+    comments,
+    reactions: reactionCounts(post.id),
+    myReaction: mine ? mine.emoji : null,
+    poll: pollInfo(post, userId),
+    engagement: likes + 2 * comments.length + shares,
+  };
+}
 
 // ---------- http helpers ----------
 function sendJson(res, status, obj) {
@@ -224,15 +268,7 @@ async function handle(req, res) {
   if (p === '/api/posts' && method === 'GET') {
     const u = requireAuth(req, res); if (!u) return;
     const hiddenIds = new Set(db.hidden.filter(h => h.userId === u.id).map(h => h.postId));
-    const posts = db.posts.filter(x => !hiddenIds.has(x.id)).slice().reverse().map(post => ({
-      ...post,
-      author: publicUser(db.users.find(x => x.id === post.userId)),
-      likes: db.likes.filter(l => l.postId === post.id).length,
-      likedByMe: db.likes.some(l => l.postId === post.id && l.userId === u.id),
-      savedByMe: db.saved.some(s => s.postId === post.id && s.userId === u.id),
-      shares: db.shares.filter(s => s.postId === post.id).length,
-      comments: db.comments.filter(c => c.postId === post.id).map(c => ({ ...c, author: publicUser(db.users.find(x => x.id === c.userId)) })),
-    }));
+    const posts = db.posts.filter(x => !hiddenIds.has(x.id)).slice().reverse().map(post => enrichPost(post, u.id));
     return sendJson(res, 200, { posts });
   }
   if (p === '/api/posts' && method === 'POST') {
@@ -240,9 +276,93 @@ async function handle(req, res) {
     const b = await readBody(req);
     const text = String(b.text || '').trim();
     if (!text && !b.imageUrl && !b.videoUrl) return sendJson(res, 400, { error: 'Post needs text, an image, or a video.' });
-    const post = { id: uid(), userId: u.id, text, imageUrl: String(b.imageUrl || ''), videoUrl: String(b.videoUrl || ''), createdAt: now(), isDemo: false };
+    let pollOptions = null;
+    if (b.pollOptions !== undefined && b.pollOptions !== null) {
+      if (!Array.isArray(b.pollOptions)) return sendJson(res, 400, { error: 'Poll options must be a list.' });
+      pollOptions = b.pollOptions.map(x => String(x || '').trim()).filter(Boolean);
+      if (pollOptions.length < 2 || pollOptions.length > 4) return sendJson(res, 400, { error: 'A poll needs 2 to 4 options.' });
+    }
+    const post = { id: uid(), userId: u.id, text, imageUrl: String(b.imageUrl || ''), videoUrl: String(b.videoUrl || ''), pollOptions, createdAt: now(), isDemo: false };
     db.posts.push(post); save();
-    return sendJson(res, 201, { post });
+    return sendJson(res, 201, { post: enrichPost(post, u.id) });
+  }
+  // Emoji reactions: one per user per post; same emoji again removes it, another switches it.
+  const reactMatch = p.match(/^\/api\/posts\/([^/]+)\/react$/);
+  if (reactMatch && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const post = db.posts.find(x => x.id === reactMatch[1]);
+    if (!post) return sendJson(res, 404, { error: 'Post not found' });
+    const b = await readBody(req);
+    const emoji = String(b.emoji || '');
+    if (!REACTION_EMOJIS.includes(emoji)) return sendJson(res, 400, { error: 'Emoji must be one of ❤️ 😂 🔥 👍 😮 😢.' });
+    const reactions = arr('reactions');
+    const i = reactions.findIndex(r => r.postId === post.id && r.userId === u.id);
+    if (i >= 0 && reactions[i].emoji === emoji) reactions.splice(i, 1);
+    else if (i >= 0) reactions[i].emoji = emoji;
+    else reactions.push({ postId: post.id, userId: u.id, emoji });
+    save();
+    return sendJson(res, 200, { ok: true, post: enrichPost(post, u.id) });
+  }
+  // Poll votes: changeable.
+  const voteMatch = p.match(/^\/api\/posts\/([^/]+)\/vote$/);
+  if (voteMatch && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const post = db.posts.find(x => x.id === voteMatch[1]);
+    if (!post) return sendJson(res, 404, { error: 'Post not found' });
+    if (!Array.isArray(post.pollOptions) || !post.pollOptions.length) return sendJson(res, 400, { error: 'This post has no poll.' });
+    const b = await readBody(req);
+    const optionIndex = Number(b.optionIndex);
+    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= post.pollOptions.length) return sendJson(res, 400, { error: 'Invalid poll option.' });
+    const votes = arr('pollVotes');
+    const i = votes.findIndex(v => v.postId === post.id && v.userId === u.id);
+    if (i >= 0) votes[i].optionIndex = optionIndex;
+    else votes.push({ postId: post.id, userId: u.id, optionIndex });
+    save();
+    return sendJson(res, 200, { ok: true, post: enrichPost(post, u.id) });
+  }
+  // Explore / Trending: engagement = likes + 2*comments + shares, highest first, hidden excluded.
+  if (p === '/api/explore' && method === 'GET') {
+    const u = requireAuth(req, res); if (!u) return;
+    const hiddenIds = new Set(db.hidden.filter(h => h.userId === u.id).map(h => h.postId));
+    const posts = db.posts.filter(x => !hiddenIds.has(x.id)).map(post => enrichPost(post, u.id))
+      .sort((a, b) => (b.engagement - a.engagement) || (new Date(b.createdAt) - new Date(a.createdAt)));
+    return sendJson(res, 200, { posts });
+  }
+  // Events with RSVP: one RSVP per user, changeable.
+  if (p === '/api/events' && method === 'GET') {
+    const u = requireAuth(req, res); if (!u) return;
+    const rsvps = arr('rsvps');
+    const events = arr('events').slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).map(e => {
+      const mine = rsvps.find(r => r.eventId === e.id && r.userId === u.id);
+      const counts = { going: 0, interested: 0, 'not-going': 0 };
+      for (const r of rsvps.filter(x => x.eventId === e.id)) if (counts[r.status] !== undefined) counts[r.status]++;
+      return { ...e, creator: publicUser(db.users.find(x => x.id === e.userId)), rsvpCounts: counts, myRsvp: mine ? mine.status : null };
+    });
+    return sendJson(res, 200, { events });
+  }
+  if (p === '/api/events' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const title = String(b.title || '').trim(), date = String(b.date || '').trim();
+    if (!title || !date) return sendJson(res, 400, { error: 'Event title and date are required.' });
+    const event = { id: uid(), userId: u.id, title, date, location: String(b.location || ''), description: String(b.description || ''), createdAt: now(), isDemo: false };
+    arr('events').push(event); save();
+    return sendJson(res, 201, { event });
+  }
+  const rsvpMatch = p.match(/^\/api\/events\/([^/]+)\/rsvp$/);
+  if (rsvpMatch && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const event = arr('events').find(x => x.id === rsvpMatch[1]);
+    if (!event) return sendJson(res, 404, { error: 'Event not found' });
+    const b = await readBody(req);
+    const status = String(b.status || '');
+    if (!['going', 'interested', 'not-going'].includes(status)) return sendJson(res, 400, { error: 'RSVP status must be going, interested, or not-going.' });
+    const rsvps = arr('rsvps');
+    const i = rsvps.findIndex(r => r.eventId === event.id && r.userId === u.id);
+    if (i >= 0) rsvps[i].status = status;
+    else rsvps.push({ eventId: event.id, userId: u.id, status });
+    save();
+    return sendJson(res, 200, { ok: true });
   }
   const postAction = p.match(/^\/api\/posts\/([^/]+)\/(like|comment|share|save|hide)$/);
   if (postAction && method === 'POST') {

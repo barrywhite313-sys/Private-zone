@@ -13,6 +13,8 @@ function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   $('view-' + name).classList.remove('hidden');
   if (name === 'feed') loadFeed();
+  if (name === 'explore') loadExplore();
+  if (name === 'events') loadEvents();
   if (name === 'friends') loadFriends();
   if (name === 'chats') loadChats();
   if (name === 'earn') loadEarn();
@@ -47,32 +49,61 @@ $('premiumBtn').onclick = () => {
   if (config.premiumConfigured) window.open(config.premiumPaymentLink, '_blank');
   else alert('Premium checkout is not configured yet. The owner must paste a payment link he creates in his own Stripe dashboard into STRIPE_PREMIUM_PAYMENT_LINK (see README). No link has been invented.');
 };
-$('postBtn').onclick = async () => { await api('/api/posts', 'POST', { text: $('postText').value, imageUrl: $('postImage').value, videoUrl: $('postVideo').value }); $('postText').value = ''; loadFeed(); };
+$('postBtn').onclick = async () => {
+  const pollOptions = [...document.querySelectorAll('.pollOpt')].map(i => i.value.trim()).filter(Boolean);
+  if (pollOptions.length === 1) { alert('A poll needs 2 to 4 options — add one more or clear the poll fields.'); return; }
+  try {
+    await api('/api/posts', 'POST', { text: $('postText').value, imageUrl: $('postImage').value, videoUrl: $('postVideo').value, ...(pollOptions.length ? { pollOptions } : {}) });
+    $('postText').value = ''; $('postImage').value = ''; $('postVideo').value = '';
+    document.querySelectorAll('.pollOpt').forEach(i => i.value = '');
+    loadFeed();
+  } catch (e) { alert(e.message); }
+};
 $('storyBtn').onclick = async () => { await api('/api/stories', 'POST', { text: $('storyText').value }); $('storyText').value = ''; loadFeed(); };
-async function loadFeed() {
-  const posts = (await api('/api/posts')).posts;
-  const stories = (await api('/api/stories')).stories;
-  $('stories').innerHTML = stories.map(s => `<div>👤 ${esc(s.author?.name)}: ${esc(s.text)} ${s.isDemo ? '<span class="demo-badge">DEMO</span>' : ''}</div>`).join('') || '<p class="muted">No stories yet.</p>';
-  $('feed').innerHTML = posts.map(p => `<div class="card post">
+const REACTION_EMOJIS = ['❤️', '😂', '🔥', '👍', '😮', '😢'];
+function renderPost(p, score) {
+  const reactions = p.reactions || {};
+  const pollHtml = p.poll ? `<div class="poll">
+    <div class="muted">📊 Poll — ${p.poll.totalVotes} vote(s)${p.poll.myVote !== null && p.poll.myVote !== undefined ? ' · you voted' : ''}</div>
+    ${p.poll.options.map(o => `<div class="poll-option"><button onclick="votePost('${p.id}', ${o.optionIndex})">${esc(o.text)}${p.poll.myVote === o.optionIndex ? ' ✓' : ''}</button> <span>${o.votes} votes · ${o.percent}%</span><div class="poll-bar"><div style="width:${o.percent}%"></div></div></div>`).join('')}
+  </div>` : '';
+  return `<div class="card post">
     <strong>${esc(p.author?.name)}</strong> ${p.isDemo ? '<span class="demo-badge">DEMO</span>' : ''} <span class="muted">${new Date(p.createdAt).toLocaleString()}</span>
+    ${score !== undefined ? `<span class="muted"> · 🔥 ${score}</span>` : ''}
     <p>${esc(p.text)}</p>
     ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" style="max-width:100%">` : ''}
     ${p.videoUrl ? `<video src="${esc(p.videoUrl)}" controls style="max-width:100%"></video>` : ''}
+    ${pollHtml}
     <div>
       <button onclick="likePost('${p.id}')">👍 Like (${p.likes})${p.likedByMe ? ' ✓' : ''}</button>
       <button onclick="sharePost('${p.id}')">↗ Share (${p.shares})</button>
       <button onclick="savePost('${p.id}')">${p.savedByMe ? 'Saved ✓' : 'Save'}</button>
       <button onclick="hidePost('${p.id}')">Hide</button>
     </div>
+    <div class="reactions">
+      ${REACTION_EMOJIS.map(e => `<button class="react-btn${p.myReaction === e ? ' active' : ''}" onclick="reactPost('${p.id}', '${e}')">${e} ${reactions[e] || 0}</button>`).join('')}
+    </div>
     <div>${p.comments.map(c => `<div><strong>${esc(c.author?.name)}:</strong> ${esc(c.text)}</div>`).join('')}</div>
     <input id="c-${p.id}" placeholder="Write a comment…"><button onclick="commentPost('${p.id}')">Comment</button>
-  </div>`).join('') || '<p class="muted">No posts yet — be the first.</p>';
+  </div>`;
+}
+async function loadFeed() {
+  const posts = (await api('/api/posts')).posts;
+  const stories = (await api('/api/stories')).stories;
+  $('stories').innerHTML = stories.map(s => `<div>👤 ${esc(s.author?.name)}: ${esc(s.text)} ${s.isDemo ? '<span class="demo-badge">DEMO</span>' : ''}</div>`).join('') || '<p class="muted">No stories yet.</p>';
+  $('feed').innerHTML = posts.map(p => renderPost(p)).join('') || '<p class="muted">No posts yet — be the first.</p>';
+}
+async function loadExplore() {
+  const posts = (await api('/api/explore')).posts;
+  $('exploreList').innerHTML = posts.map(p => renderPost(p, p.engagement)).join('') || '<p class="muted">Nothing trending yet.</p>';
 }
 window.likePost = async id => { await api(`/api/posts/${id}/like`, 'POST', {}); loadFeed(); };
 window.sharePost = async id => { await api(`/api/posts/${id}/share`, 'POST', {}); loadFeed(); };
 window.savePost = async id => { await api(`/api/posts/${id}/save`, 'POST', {}); loadFeed(); };
 window.hidePost = async id => { await api(`/api/posts/${id}/hide`, 'POST', {}); loadFeed(); };
 window.commentPost = async id => { const v = $('c-' + id).value; if (!v) return; await api(`/api/posts/${id}/comment`, 'POST', { text: v }); loadFeed(); };
+window.reactPost = async (id, emoji) => { await api(`/api/posts/${id}/react`, 'POST', { emoji }); const view = document.querySelector('.view:not(.hidden)')?.id; if (view === 'view-explore') loadExplore(); else loadFeed(); };
+window.votePost = async (id, optionIndex) => { await api(`/api/posts/${id}/vote`, 'POST', { optionIndex }); const view = document.querySelector('.view:not(.hidden)')?.id; if (view === 'view-explore') loadExplore(); else loadFeed(); };
 
 async function loadFriends() {
   const f = (await api('/api/friends')).friends;
@@ -132,6 +163,29 @@ async function loadWatch() {
   const v = (await api('/api/watch')).videos;
   $('watchList').innerHTML = v.map(x => `<div class="card"><strong>${esc(x.author?.name)}</strong><p>${esc(x.text)}</p><video src="${esc(x.videoUrl)}" controls style="max-width:100%"></video></div>`).join('') || '<p class="muted">No videos yet — post with a video URL and it will appear here.</p>';
 }
+async function loadEvents() {
+  const events = (await api('/api/events')).events;
+  $('eventList').innerHTML = events.map(e => `<div class="card">
+    <strong>${esc(e.title)}</strong> ${e.isDemo ? '<span class="demo-badge">DEMO</span>' : ''} <span class="muted">by ${esc(e.creator?.name)}</span>
+    <p class="muted">${esc(e.date)}${e.location ? ' · ' + esc(e.location) : ''}</p>
+    <p>${esc(e.description)}</p>
+    <div class="muted">✅ Going ${e.rsvpCounts.going} · 🤔 Interested ${e.rsvpCounts.interested} · ❌ Not going ${e.rsvpCounts['not-going']}${e.myRsvp ? ' · You: ' + e.myRsvp : ''}</div>
+    <div>
+      <button class="${e.myRsvp === 'going' ? 'active' : ''}" onclick="rsvpEvent('${e.id}', 'going')">Going</button>
+      <button class="${e.myRsvp === 'interested' ? 'active' : ''}" onclick="rsvpEvent('${e.id}', 'interested')">Interested</button>
+      <button class="${e.myRsvp === 'not-going' ? 'active' : ''}" onclick="rsvpEvent('${e.id}', 'not-going')">Not going</button>
+    </div>
+  </div>`).join('') || '<p class="muted">No events yet — create the first one.</p>';
+}
+$('eventBtn').onclick = async () => {
+  try {
+    await api('/api/events', 'POST', { title: $('eventTitle').value, date: $('eventDate').value, location: $('eventLocation').value, description: $('eventDesc').value });
+    $('eventTitle').value = ''; $('eventDate').value = ''; $('eventLocation').value = ''; $('eventDesc').value = ''; $('eventMsg').textContent = 'Event created.';
+    loadEvents();
+  } catch (e) { $('eventMsg').textContent = e.message; }
+};
+window.rsvpEvent = async (id, status) => { await api(`/api/events/${id}/rsvp`, 'POST', { status }); loadEvents(); };
+
 async function loadProfile() {
   $('profileInfo').innerHTML = `<p><strong>${esc(me.name)}</strong><br>${esc(me.bio || 'No bio yet.')}</p>`;
   $('bioInput').value = me.bio || '';

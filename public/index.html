@@ -11,6 +11,8 @@
   <div class="brand">Private Zone</div>
   <nav id="nav" class="hidden">
     <button data-view="feed">Feed</button>
+    <button data-view="explore">Explore</button>
+    <button data-view="events">Events</button>
     <button data-view="friends">Friends</button>
     <button data-view="chats">Chats</button>
     <button data-view="earn">Earn</button>
@@ -63,6 +65,11 @@
         <textarea id="postText" rows="3" placeholder="Share something…"></textarea>
         <input id="postImage" placeholder="Image URL (optional)">
         <input id="postVideo" placeholder="Video URL (optional, shows in Watch too)">
+        <p class="muted">Poll (optional — fill in 2 to 4 options):</p>
+        <input class="pollOpt" placeholder="Poll option 1 (optional)">
+        <input class="pollOpt" placeholder="Poll option 2 (optional)">
+        <input class="pollOpt" placeholder="Poll option 3 (optional)">
+        <input class="pollOpt" placeholder="Poll option 4 (optional)">
         <button id="postBtn">Post</button>
       </div>
       <div class="card">
@@ -73,6 +80,24 @@
       </div>
       <div class="card ad-slot"><strong>Ad</strong> — placeholder. Your ad goes here. No ad network is connected yet.</div>
       <div id="feed"></div>
+    </div>
+
+    <div id="view-explore" class="view hidden">
+      <div class="card"><h2>Explore — Trending</h2><p class="muted">Ranked by engagement: likes + 2 × comments + shares. Posts you hid are excluded.</p></div>
+      <div id="exploreList"></div>
+    </div>
+
+    <div id="view-events" class="view hidden">
+      <div class="card">
+        <h2>Create an event</h2>
+        <input id="eventTitle" placeholder="Event title">
+        <input id="eventDate" placeholder="Date (e.g. 2026-11-01 or Nov 1, 7pm)">
+        <input id="eventLocation" placeholder="Location (optional)">
+        <textarea id="eventDesc" rows="2" placeholder="Description (optional)"></textarea>
+        <button id="eventBtn">Create event</button>
+        <p id="eventMsg" class="msg"></p>
+      </div>
+      <div id="eventList"></div>
     </div>
 
     <div id="view-friends" class="view hidden">
