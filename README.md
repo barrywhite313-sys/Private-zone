@@ -62,13 +62,47 @@ Premium is **server-enforced**, not just a label:
   in the app** — there is no price amount in this codebase, and the view
   says only that the price, if any, is set by the owner in Stripe.
 
-### Manual Premium granting (no webhook yet)
+### Stripe webhook (automatic Premium granting)
 
-There is still **no Stripe webhook**. After a user pays through your Stripe
-payment link, confirm the payment in your Stripe dashboard, then grant
-Premium manually with the owner-only endpoint below. A real Stripe webhook
-that verifies the Stripe signature and flips `premium: true` for the paying
-user is still the recommended follow-up.
+`POST /api/stripe/webhook` verifies the `Stripe-Signature` header with
+HMAC-SHA256 against `STRIPE_WEBHOOK_SECRET` over the **raw** request body
+(signatures older than 5 minutes are rejected), then:
+
+- `checkout.session.completed` — finds the user by the session's customer
+  email (`customer_details.email` or `customer_email`, lowercased) and sets
+  `premium: true`, storing `stripeCustomerId` from `session.customer` when
+  present. An unknown email returns 200 with `granted: false` (not a 404,
+  so Stripe does not retry a payment for an email with no account) — the
+  owner can still grant that user manually.
+- `invoice.paid` — if `invoice.customer` matches a stored
+  `stripeCustomerId`, that user is set `premium: true`.
+- `customer.subscription.deleted` — if `subscription.customer` matches a
+  stored `stripeCustomerId`, that user is set `premium: false`.
+- Any other event type returns 200 with `ignored: true`, so Stripe does not
+  retry it endlessly. Granting/revoking is idempotent.
+
+To wire it up (owner steps, in your own Stripe dashboard — nothing here
+is created for you, and no secret, price, or link is invented):
+
+1. In Stripe, go to **Developers > Webhooks > Add endpoint**.
+2. Endpoint URL: `https://private-zone-xm7p.onrender.com/api/stripe/webhook`
+   (this is the live Render URL; the code itself does not hardcode it —
+   if you move hosts, use your new host's URL with the same path).
+3. Select exactly these events: `checkout.session.completed`,
+   `invoice.paid`, `customer.subscription.deleted`.
+4. Copy the endpoint's **Signing secret** (starts with `whsec_…`) and set
+   it on Render as the env var `STRIPE_WEBHOOK_SECRET`, then redeploy.
+5. Test with a test-mode payment: the paying user's account (matching the
+   Stripe customer email) should flip to Premium without a manual grant.
+   If `STRIPE_WEBHOOK_SECRET` is empty, the endpoint returns 503 and
+   grants nothing; a bad signature or bad JSON returns 400 and grants
+   nothing.
+
+### Manual Premium granting (fallback)
+
+If the webhook is not configured, or a payment's email does not match an
+account, confirm the payment in your Stripe dashboard, then grant Premium
+manually with the owner-only endpoint below.
 
 Set this env var on the host (a long random string you generate yourself):
 
@@ -100,9 +134,11 @@ and the Earn platform-fee math is unchanged.
 - **Payouts are records only.** Cashing out an Earn collab creates a payout record
   with each person's share. **No real money is sent.** Real payouts require the owner
   to complete **Stripe Connect verification** and then wire payouts (see “Going live”).
-- **Premium is not auto-granted after payment.** There is no Stripe webhook in this
-  codebase yet. If a user pays through your Stripe link, you must confirm the payment
-  in Stripe and mark them Premium (a webhook is the recommended next step — see below).
+- **Premium is only auto-granted once you wire up the webhook.** The
+  `/api/stripe/webhook` endpoint exists and verifies Stripe signatures, but
+  it does nothing until you create the endpoint in Stripe and set
+  `STRIPE_WEBHOOK_SECRET` on Render (see “Stripe webhook” above). Until
+  then, confirm payments in Stripe and grant Premium manually.
 - **Video on some networks needs a TURN server.** WebRTC uses a public STUN server
   by default. Behind symmetric NATs / strict corporate networks, calls may fail
   without TURN. Set `TURN_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL` from a TURN
@@ -182,7 +218,7 @@ private-zone-live/
 | Notifications | `GET /api/notifications`, `POST /api/notifications/read-all` |
 | Earn | `GET+POST /api/earn/collabs`, `POST /api/earn/collabs/:id/cashout`, `GET /api/earn/payouts` |
 | Video calls | `POST /api/calls`, `GET /api/calls/incoming`, `GET /api/calls/:id`, `POST /api/calls/:id/signal`, `GET /api/calls/:id/signal?since=N`, `POST /api/calls/:id/end` |
-| Premium / admin | `GET /api/config` (includes `currentUserPremium` when called with a Bearer token), `POST /api/admin/premium/grant` (header `X-Admin-Key: PREMIUM_ADMIN_KEY`) |
+| Premium / admin | `GET /api/config` (includes `currentUserPremium` when called with a Bearer token), `POST /api/admin/premium/grant` (header `X-Admin-Key: PREMIUM_ADMIN_KEY`), `POST /api/stripe/webhook` (verified by `Stripe-Signature` + `STRIPE_WEBHOOK_SECRET`) |
 
 ### Earn split math (worked example)
 - Sources total: **$100**
@@ -225,10 +261,13 @@ key, or payout is invented for you.**
 2. Create a Premium product/price in Stripe, then create a **payment link** for it.
 3. Copy **your** payment link into `STRIPE_PREMIUM_PAYMENT_LINK` on the host.
 4. Test it yourself with a test payment before telling users about Premium.
-5. Remember: payment does **not** auto-grant Premium in this codebase yet.
-   Recommended next step: add a Stripe webhook endpoint that verifies the Stripe
-   signature and flips `premium: true` for the paying user. Until then, confirm
-   payments in Stripe and grant Premium manually.
+5. Set up the Stripe webhook so payment auto-grants Premium: create the
+   endpoint in Stripe at `https://private-zone-xm7p.onrender.com/api/stripe/webhook`
+   with events `checkout.session.completed`, `invoice.paid`, and
+   `customer.subscription.deleted`, and set `STRIPE_WEBHOOK_SECRET` on the
+   host (see “Stripe webhook” above). Until that is wired up, confirm
+   payments in Stripe and grant Premium manually via
+   `/api/admin/premium/grant`.
 
 ### 3. Real Earn payouts — Stripe Connect verification (required before any real payout)
 1. In Stripe, set up **Connect** and complete identity/business verification.

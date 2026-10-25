@@ -24,6 +24,10 @@ const TURN_URL = process.env.TURN_URL || '';
 const TURN_USERNAME = process.env.TURN_USERNAME || '';
 const TURN_CREDENTIAL = process.env.TURN_CREDENTIAL || '';
 const PREMIUM_ADMIN_KEY = process.env.PREMIUM_ADMIN_KEY || '';
+// Stripe webhook signing secret (whsec_...), copied from the Stripe dashboard
+// for the webhook endpoint. Never invented, never committed. If empty, the
+// webhook endpoint refuses everything (503) and grants nothing.
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 // Premium profile accent colours — fixed safe list only; a value outside
 // this list is rejected. No price is invented anywhere: there is no price
 // amount env var, and the Premium view never shows a price.
@@ -114,7 +118,10 @@ function verifyToken(token) {
 }
 function publicUser(u) {
   if (!u) return null;
-  const { passwordHash, email, ...rest } = u;
+  // stripeCustomerId is an internal Stripe identifier: it is stored on the
+  // user so webhooks can match invoices/subscriptions, but it is never
+  // exposed through any public user object.
+  const { passwordHash, email, stripeCustomerId, ...rest } = u;
   return { ...rest, email: undefined };
 }
 function notify(userId, type, text, relatedId) {
@@ -194,6 +201,46 @@ function readBody(req) {
     });
   });
 }
+// ---------- Stripe webhook ----------
+// Stripe's signature is computed over the RAW request body, so the webhook
+// route must read the raw bytes itself — the JSON body reader above loses
+// them (re-stringifying parsed JSON is not the same payload). This reader
+// accumulates Buffers and returns the exact UTF-8 string that arrived.
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', c => { chunks.push(c); total += c.length; if (total > 1e6) req.destroy(); });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+// Verify a Stripe-Signature header: format "t=<timestamp>,v1=<sig>,..."
+// (there may be several v1 values). The signed payload is
+// "<timestamp>.<rawBody>", HMAC-SHA256 with STRIPE_WEBHOOK_SECRET, hex.
+// Signatures older than 5 minutes are rejected (replay protection).
+function verifyStripeSignature(rawBody, header, secret) {
+  if (!header || !secret) return false;
+  const parts = {};
+  for (const item of String(header).split(',')) {
+    const eq = item.indexOf('=');
+    if (eq > 0) {
+      const k = item.slice(0, eq).trim();
+      (parts[k] = parts[k] || []).push(item.slice(eq + 1).trim());
+    }
+  }
+  const timestamps = parts.t || [];
+  const signatures = parts.v1 || [];
+  if (timestamps.length !== 1 || !signatures.length) return false;
+  const ts = Number(timestamps[0]);
+  if (!Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
+  const expected = crypto.createHmac('sha256', secret).update(`${timestamps[0]}.${rawBody}`).digest('hex');
+  for (const sig of signatures) {
+    if (sig.length !== expected.length) continue;
+    try { if (crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return true; } catch { /* length mismatch already guarded */ }
+  }
+  return false;
+}
 function authUser(req) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -222,6 +269,53 @@ async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   const method = req.method;
+
+  // Stripe webhook — handled FIRST, before any JSON body parsing, because
+  // it needs the raw body for signature verification. No auth token is
+  // required here: the Stripe signature IS the authentication. If the
+  // signing secret is not configured, refuse everything and grant nothing.
+  // Responses are deliberately 200 for well-formed events Stripe should not
+  // retry (unknown email, unhandled type); only bad signatures / bad JSON
+  // get a 400, and a missing secret gets a 503.
+  if (p === '/api/stripe/webhook') {
+    if (method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    if (!STRIPE_WEBHOOK_SECRET) return sendJson(res, 503, { error: 'Stripe webhook is not configured (STRIPE_WEBHOOK_SECRET is empty).' });
+    const rawBody = await readRawBody(req);
+    if (!verifyStripeSignature(rawBody, req.headers['stripe-signature'] || '', STRIPE_WEBHOOK_SECRET)) {
+      return sendJson(res, 400, { error: 'Invalid Stripe signature.' });
+    }
+    let event;
+    try { event = JSON.parse(rawBody); } catch { return sendJson(res, 400, { error: 'Invalid JSON in webhook body.' }); }
+    if (!event || typeof event.type !== 'string' || !event.data || !event.data.object) {
+      return sendJson(res, 400, { error: 'Malformed Stripe event.' });
+    }
+    const obj = event.data.object;
+    if (event.type === 'checkout.session.completed') {
+      const email = String((obj.customer_details && obj.customer_details.email) || obj.customer_email || '').trim().toLowerCase();
+      if (!email) return sendJson(res, 200, { received: true, granted: false, reason: 'no customer email' });
+      const user = db.users.find(x => x.email === email);
+      if (!user) return sendJson(res, 200, { received: true, granted: false, reason: 'user not found' });
+      // Idempotent: granting an already-Premium user just stays Premium.
+      user.premium = true;
+      if (typeof obj.customer === 'string' && obj.customer) user.stripeCustomerId = obj.customer;
+      save();
+      return sendJson(res, 200, { received: true, granted: true });
+    }
+    if (event.type === 'invoice.paid') {
+      const user = typeof obj.customer === 'string' ? db.users.find(x => x.stripeCustomerId === obj.customer) : null;
+      if (!user) return sendJson(res, 200, { received: true, granted: false, reason: 'no matching customer' });
+      user.premium = true; save();
+      return sendJson(res, 200, { received: true, granted: true });
+    }
+    if (event.type === 'customer.subscription.deleted') {
+      const user = typeof obj.customer === 'string' ? db.users.find(x => x.stripeCustomerId === obj.customer) : null;
+      if (!user) return sendJson(res, 200, { received: true, revoked: false, reason: 'no matching customer' });
+      user.premium = false; save();
+      return sendJson(res, 200, { received: true, revoked: true });
+    }
+    // Any other event type: acknowledge so Stripe does not retry it endlessly.
+    return sendJson(res, 200, { received: true, ignored: true });
+  }
 
   if (p === '/api/health') return sendJson(res, 200, { ok: true, app: 'Private Zone', version: '1.0.0' });
   if (p === '/api/config') {
@@ -301,7 +395,8 @@ async function handle(req, res) {
   }
 
   // Owner grant tool (manual Premium granting after a Stripe payment is
-  // confirmed in the Stripe dashboard — there is no webhook yet).
+  // confirmed in the Stripe dashboard — kept as a fallback now that the
+  // Stripe webhook at /api/stripe/webhook can grant automatically).
   // Protected by PREMIUM_ADMIN_KEY via the X-Admin-Key header. If the env
   // var is empty, this endpoint always refuses (403) rather than allowing
   // open grants.
