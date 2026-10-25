@@ -42,3 +42,22 @@ button.active{background:#00e5ff;color:#111}
   .card{padding:14px;border-radius:16px}
   .topbar{padding:10px 12px}
 }
+
+/* Animations — pure CSS, no libraries, kept short so phones stay fast. */
+@keyframes pz-fade-up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pz-pop{0%{transform:scale(1)}40%{transform:scale(1.25)}100%{transform:scale(1)}}
+@keyframes pz-gradient{from{background-position:0% 50%}to{background-position:100% 50%}}
+@keyframes pz-glow{0%,100%{box-shadow:0 0 0 rgba(255,196,0,0)}50%{box-shadow:0 0 18px rgba(255,196,0,.35)}}
+.card{animation:pz-fade-up .45s ease both}
+.view{animation:pz-fade-up .3s ease both}
+.post{animation:pz-fade-up .4s ease both}
+.brand{background-size:200% auto;animation:pz-gradient 6s ease-in-out infinite alternate}
+button{transition:transform .15s ease,filter .15s ease,box-shadow .2s ease}
+button:hover{transform:translateY(-1px)}
+button:active{transform:scale(.96)}
+.react-btn{transition:transform .15s ease,background .2s ease}
+.react-btn.active{animation:pz-pop .3s ease}
+.ad-slot{animation:pz-glow 4s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
