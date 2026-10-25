@@ -1,0 +1,1 @@
+{"description":"Private Zone — a real, server-backed, multi-user social app friends can join and pay on. Codebase only; not a Muse artifact.","engines":{"node":">=18"},"license":"UNLICENSED","main":"server.js","name":"private-zone-live","private":true,"scripts":{"start":"node server.js"},"type":"commonjs","version":"1.0.0"}
