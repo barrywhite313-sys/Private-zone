@@ -29,8 +29,9 @@ const PREMIUM_ADMIN_KEY = process.env.PREMIUM_ADMIN_KEY || '';
 // webhook endpoint refuses everything (503) and grants nothing.
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 // Premium profile accent colours — fixed safe list only; a value outside
-// this list is rejected. No price is invented anywhere: there is no price
-// amount env var, and the Premium view never shows a price.
+// this list is rejected. The Premium price label below is the owner's chosen
+// price ($35 one-time, confirmed 2026-10-25); it can be changed via env.
+const PREMIUM_PRICE_LABEL = process.env.PREMIUM_PRICE_LABEL || '$35 one-time';
 const ACCENT_COLORS = { orange: '#ff6a00', gold: '#ffc400', cyan: '#00e5ff', pink: '#e91e63', purple: '#9c27b0', green: '#4caf50' };
 
 if (!process.env.SESSION_SECRET) {
@@ -328,6 +329,7 @@ async function handle(req, res) {
       premiumConfigured: Boolean(STRIPE_PREMIUM_PAYMENT_LINK),
       premiumPaymentLink: STRIPE_PREMIUM_PAYMENT_LINK || null,
       premiumPriceId: STRIPE_PREMIUM_PRICE_ID || null,
+      premiumPriceLabel: PREMIUM_PRICE_LABEL,
       turnConfigured: Boolean(TURN_URL),
       payoutsAreRecordsOnly: true,
       payoutNote: 'Payouts are recorded only. No real money is sent until the owner completes Stripe Connect verification.',

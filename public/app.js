@@ -58,10 +58,10 @@ async function loadPremium() {
     : `You are on the Free plan. Premium is not active for your account.`;
   $('premiumAccent').value = me.accentColor || '';
   if (config.premiumConfigured) {
-    $('premiumCheckout').innerHTML = `<p class="muted">Checkout is configured. The price is set by the owner in Stripe — no price is shown here.</p><button id="premiumCheckoutBtn">Open Premium checkout</button>`;
+    $('premiumCheckout').innerHTML = `<p><strong>Premium: ${esc(config.premiumPriceLabel || '$35 one-time')}</strong> — one-time payment, not a subscription.</p><button id="premiumCheckoutBtn">Open Premium checkout</button>`;
     $('premiumCheckoutBtn').onclick = () => window.open(config.premiumPaymentLink, '_blank');
   } else {
-    $('premiumCheckout').innerHTML = `<p><strong>Checkout not configured yet.</strong> The owner has not added a Premium payment link yet, so checkout is not available. No link or price has been invented.</p>`;
+    $('premiumCheckout').innerHTML = `<p><strong>Premium: ${esc(config.premiumPriceLabel || '$35 one-time')}</strong> — one-time payment, not a subscription.</p><p><strong>Checkout not configured yet.</strong> The owner has not added a Premium payment link yet, so checkout is not available. No link has been invented.</p>`;
   }
 }
 $('premiumAccentBtn').onclick = async () => {
