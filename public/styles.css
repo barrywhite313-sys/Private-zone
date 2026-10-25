@@ -57,6 +57,9 @@ button:hover{transform:translateY(-1px)}
 button:active{transform:scale(.96)}
 .react-btn{transition:transform .15s ease,background .2s ease}
 .react-btn.active{animation:pz-pop .3s ease}
+select{width:100%;padding:12px;margin:6px 0;border:1px solid #3a3a46;border-radius:12px;background:#23232b;color:#fff;min-height:44px}
+.flash-item{animation:pz-fade-up .45s ease both}
+.flash-opened{animation:pz-pop .3s ease;border:2px solid #ff6a00}
 .ad-slot{animation:pz-glow 4s ease-in-out infinite}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}

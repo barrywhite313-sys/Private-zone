@@ -15,6 +15,7 @@ function showView(name) {
   if (name === 'feed') loadFeed();
   if (name === 'explore') loadExplore();
   if (name === 'events') loadEvents();
+  if (name === 'flashes') loadFlashes();
   if (name === 'friends') loadFriends();
   if (name === 'chats') loadChats();
   if (name === 'earn') loadEarn();
@@ -104,6 +105,47 @@ window.hidePost = async id => { await api(`/api/posts/${id}/hide`, 'POST', {}); 
 window.commentPost = async id => { const v = $('c-' + id).value; if (!v) return; await api(`/api/posts/${id}/comment`, 'POST', { text: v }); loadFeed(); };
 window.reactPost = async (id, emoji) => { await api(`/api/posts/${id}/react`, 'POST', { emoji }); const view = document.querySelector('.view:not(.hidden)')?.id; if (view === 'view-explore') loadExplore(); else loadFeed(); };
 window.votePost = async (id, optionIndex) => { await api(`/api/posts/${id}/vote`, 'POST', { optionIndex }); const view = document.querySelector('.view:not(.hidden)')?.id; if (view === 'view-explore') loadExplore(); else loadFeed(); };
+
+function flashTimeLeft(ms) {
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return mins + 'm left';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h + 'h ' + m + 'm left';
+}
+async function loadFlashes() {
+  const users = (await api('/api/users')).users;
+  $('flashRecipient').innerHTML = users.filter(u => u.id !== me.id).map(u => `<option value="${u.id}">${esc(u.name)}${u.isDemo ? ' (DEMO)' : ''}</option>`).join('') || '<option value="">No other users yet</option>';
+  const inbox = (await api('/api/flashes')).flashes;
+  $('flashInbox').innerHTML = inbox.map(f => `<div class="card flash-item">
+    <strong>⚡ Flash from ${esc(f.sender?.name)}</strong> <span class="muted">${new Date(f.createdAt).toLocaleString()} · ${flashTimeLeft(f.msLeft)}</span>
+    <div class="muted">${[f.hasText ? 'text' : '', f.hasImage ? 'image' : '', f.hasVideo ? 'video' : ''].filter(Boolean).join(' + ') || 'empty'}</div>
+    <button onclick="openFlash('${f.id}')">Open flash</button>
+  </div>`).join('') || '<p class="muted">No Flashes waiting for you.</p>';
+  const sent = (await api('/api/flashes/sent')).flashes;
+  $('flashSent').innerHTML = sent.map(f => `<div><strong>To ${esc(f.recipient?.name)}</strong> <span class="muted">${new Date(f.createdAt).toLocaleString()} · ${f.viewed ? 'Viewed — gone' : f.expired ? 'Expired' : 'Waiting'}</span></div>`).join('') || '<p class="muted">You have not sent any Flashes yet.</p>';
+}
+$('flashSendBtn').onclick = async () => {
+  try {
+    await api('/api/flashes', 'POST', { toId: $('flashRecipient').value, text: $('flashText').value, imageUrl: $('flashImage').value, videoUrl: $('flashVideo').value });
+    $('flashText').value = ''; $('flashImage').value = ''; $('flashVideo').value = ''; $('flashMsg').textContent = 'Flash sent — it disappears after one open or 24 hours.';
+    loadFlashes();
+  } catch (e) { $('flashMsg').textContent = e.message; }
+};
+window.openFlash = async id => {
+  try {
+    const d = await api(`/api/flashes/${id}/view`, 'POST', {});
+    const f = d.flash;
+    $('flashOpened').innerHTML = `<div class="card flash-opened">
+      <strong>⚡ Flash from ${esc(f.sender?.name)}</strong>
+      ${f.text ? `<p>${esc(f.text)}</p>` : ''}
+      ${f.imageUrl ? `<img src="${esc(f.imageUrl)}" style="max-width:100%">` : ''}
+      ${f.videoUrl ? `<video src="${esc(f.videoUrl)}" controls style="max-width:100%"></video>` : ''}
+      <p class="muted">This Flash has now disappeared and cannot be opened again.</p>
+    </div>`;
+    $('flashNote').textContent = 'Flash disappeared — it can only be opened once.';
+    loadFlashes();
+  } catch (e) { alert(e.message); loadFlashes(); }
+};
 
 async function loadFriends() {
   const f = (await api('/api/friends')).friends;

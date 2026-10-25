@@ -13,6 +13,7 @@
     <button data-view="feed">Feed</button>
     <button data-view="explore">Explore</button>
     <button data-view="events">Events</button>
+    <button data-view="flashes">Flashes</button>
     <button data-view="friends">Friends</button>
     <button data-view="chats">Chats</button>
     <button data-view="earn">Earn</button>
@@ -98,6 +99,26 @@
         <p id="eventMsg" class="msg"></p>
       </div>
       <div id="eventList"></div>
+    </div>
+
+    <div id="view-flashes" class="view hidden">
+      <div class="card">
+        <h2>Send a Flash</h2>
+        <p class="muted">A Flash disappears after it is opened once, or after 24 hours — whichever comes first. It can never be opened twice.</p>
+        <select id="flashRecipient"></select>
+        <textarea id="flashText" rows="2" placeholder="Flash text…"></textarea>
+        <input id="flashImage" placeholder="Image URL (optional)">
+        <input id="flashVideo" placeholder="Video URL (optional)">
+        <button id="flashSendBtn">Send Flash</button>
+        <p id="flashMsg" class="msg"></p>
+      </div>
+      <div class="card">
+        <h2>Flashes for you</h2>
+        <p id="flashNote" class="muted"></p>
+        <div id="flashOpened"></div>
+        <div id="flashInbox"></div>
+      </div>
+      <div class="card"><h2>Flashes you sent</h2><div id="flashSent"></div></div>
     </div>
 
     <div id="view-friends" class="view hidden">

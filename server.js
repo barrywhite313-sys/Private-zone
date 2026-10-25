@@ -44,7 +44,7 @@ function seedData() {
       { id: uid(), userId: sofia.id, text: 'Photo prints are back in the shop. (Demo post)', imageUrl: '', videoUrl: '', createdAt: now(), isDemo: true },
     ],
     likes: [], comments: [], saved: [], hidden: [], shares: [],
-    reactions: [], pollVotes: [], events: [], rsvps: [],
+    reactions: [], pollVotes: [], events: [], rsvps: [], flashes: [],
     stories: [
       { id: uid(), userId: maya.id, text: 'Demo story: Sunday dinner prep', imageUrl: '', createdAt: now(), isDemo: true },
       { id: uid(), userId: dre.id, text: 'Demo story: courtside', imageUrl: '', createdAt: now(), isDemo: true },
@@ -162,6 +162,16 @@ function enrichPost(post, userId) {
     engagement: likes + 2 * comments.length + shares,
   };
 }
+
+// ---------- Flashes: ephemeral, one-time messages ----------
+// A Flash lives 24 hours and can be opened exactly once by its recipient.
+// The inbox list never carries the content itself, so listing cannot leak it.
+// After a successful view the content is cleared server-side, so a second
+// view (or any later fetch) cannot return it again.
+const FLASH_TTL_MS = 24 * 3600 * 1000;
+function flashExpired(f) { return Date.now() - new Date(f.createdAt).getTime() > FLASH_TTL_MS; }
+function flashExpiresAt(f) { return new Date(new Date(f.createdAt).getTime() + FLASH_TTL_MS).toISOString(); }
+function flashMsLeft(f) { return Math.max(0, new Date(f.createdAt).getTime() + FLASH_TTL_MS - Date.now()); }
 
 // ---------- http helpers ----------
 function sendJson(res, status, obj) {
@@ -363,6 +373,56 @@ async function handle(req, res) {
     else rsvps.push({ eventId: event.id, userId: u.id, status });
     save();
     return sendJson(res, 200, { ok: true });
+  }
+  // Flashes
+  if (p === '/api/flashes' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const toId = String(b.toId || '');
+    if (toId === u.id) return sendJson(res, 400, { error: 'You cannot send a Flash to yourself.' });
+    const target = db.users.find(x => x.id === toId);
+    if (!target) return sendJson(res, 404, { error: 'Recipient not found' });
+    const text = String(b.text || '').trim(), imageUrl = String(b.imageUrl || ''), videoUrl = String(b.videoUrl || '');
+    if (!text && !imageUrl && !videoUrl) return sendJson(res, 400, { error: 'A Flash needs text, an image, or a video.' });
+    const flash = { id: uid(), fromId: u.id, toId, text, imageUrl, videoUrl, viewed: false, createdAt: now(), isDemo: false };
+    arr('flashes').push(flash); save();
+    if (!target.isDemo) notify(toId, 'flash', `${u.name} sent you a Flash.`, flash.id);
+    return sendJson(res, 201, { flash: { id: flash.id, toId: flash.toId, createdAt: flash.createdAt, expiresAt: flashExpiresAt(flash) } });
+  }
+  if (p === '/api/flashes' && method === 'GET') {
+    const u = requireAuth(req, res); if (!u) return;
+    // Summary only: no content, so the inbox list cannot leak a one-time Flash.
+    const flashes = arr('flashes').filter(f => f.toId === u.id && !f.viewed && !flashExpired(f)).slice().reverse().map(f => ({
+      id: f.id, sender: publicUser(db.users.find(x => x.id === f.fromId)), createdAt: f.createdAt,
+      expiresAt: flashExpiresAt(f), msLeft: flashMsLeft(f),
+      hasText: Boolean(f.text), hasImage: Boolean(f.imageUrl), hasVideo: Boolean(f.videoUrl),
+    }));
+    return sendJson(res, 200, { flashes });
+  }
+  if (p === '/api/flashes/sent' && method === 'GET') {
+    const u = requireAuth(req, res); if (!u) return;
+    const flashes = arr('flashes').filter(f => f.fromId === u.id).slice().reverse().map(f => {
+      const viewed = Boolean(f.viewed), expired = flashExpired(f);
+      return {
+        id: f.id, recipient: publicUser(db.users.find(x => x.id === f.toId)), createdAt: f.createdAt,
+        expiresAt: flashExpiresAt(f), viewed, expired,
+        // Viewed (or expired) Flashes carry no re-openable content here.
+        text: (!viewed && !expired) ? f.text : '', imageUrl: (!viewed && !expired) ? f.imageUrl : '', videoUrl: (!viewed && !expired) ? f.videoUrl : '',
+      };
+    });
+    return sendJson(res, 200, { flashes });
+  }
+  const flashViewMatch = p.match(/^\/api\/flashes\/([^/]+)\/view$/);
+  if (flashViewMatch && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const flash = arr('flashes').find(x => x.id === flashViewMatch[1]);
+    if (!flash || flash.toId !== u.id) return sendJson(res, 404, { error: 'Flash not found' });
+    if (flash.viewed) return sendJson(res, 410, { error: 'This Flash has already been viewed and is gone.' });
+    if (flashExpired(flash)) return sendJson(res, 410, { error: 'This Flash has expired.' });
+    const content = { id: flash.id, sender: publicUser(db.users.find(x => x.id === flash.fromId)), text: flash.text, imageUrl: flash.imageUrl, videoUrl: flash.videoUrl, createdAt: flash.createdAt };
+    // Clear content server-side immediately, so it can never be returned again.
+    flash.viewed = true; flash.text = ''; flash.imageUrl = ''; flash.videoUrl = ''; save();
+    return sendJson(res, 200, { flash: content });
   }
   const postAction = p.match(/^\/api\/posts\/([^/]+)\/(like|comment|share|save|hide)$/);
   if (postAction && method === 'POST') {
