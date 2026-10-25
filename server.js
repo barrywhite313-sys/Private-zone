@@ -23,6 +23,11 @@ const STRIPE_PREMIUM_PRICE_ID = process.env.STRIPE_PREMIUM_PRICE_ID || '';
 const TURN_URL = process.env.TURN_URL || '';
 const TURN_USERNAME = process.env.TURN_USERNAME || '';
 const TURN_CREDENTIAL = process.env.TURN_CREDENTIAL || '';
+const PREMIUM_ADMIN_KEY = process.env.PREMIUM_ADMIN_KEY || '';
+// Premium profile accent colours — fixed safe list only; a value outside
+// this list is rejected. No price is invented anywhere: there is no price
+// amount env var, and the Premium view never shows a price.
+const ACCENT_COLORS = { orange: '#ff6a00', gold: '#ffc400', cyan: '#00e5ff', pink: '#e91e63', purple: '#9c27b0', green: '#4caf50' };
 
 if (!process.env.SESSION_SECRET) {
   console.warn('[Private Zone] WARNING: SESSION_SECRET is not set. Using a dev-only fallback. Set a long random SESSION_SECRET before going live.');
@@ -220,6 +225,10 @@ async function handle(req, res) {
 
   if (p === '/api/health') return sendJson(res, 200, { ok: true, app: 'Private Zone', version: '1.0.0' });
   if (p === '/api/config') {
+    // /api/config stays unauthenticated, but when a logged-in user calls it
+    // with a Bearer token it also reports that user's premium status, so the
+    // UI can hide ad slots for premium users reliably.
+    const current = authUser(req);
     return sendJson(res, 200, {
       platformFeePercent: PLATFORM_FEE_PERCENT,
       premiumConfigured: Boolean(STRIPE_PREMIUM_PAYMENT_LINK),
@@ -228,6 +237,7 @@ async function handle(req, res) {
       turnConfigured: Boolean(TURN_URL),
       payoutsAreRecordsOnly: true,
       payoutNote: 'Payouts are recorded only. No real money is sent until the owner completes Stripe Connect verification.',
+      ...(current ? { currentUserPremium: Boolean(current.premium), currentUserAccentColor: current.accentColor || null } : {}),
     });
   }
 
@@ -238,7 +248,7 @@ async function handle(req, res) {
     const name = String(b.name || '').trim(), email = String(b.email || '').trim().toLowerCase(), password = String(b.password || '');
     if (!name || !email || password.length < 6) return sendJson(res, 400, { error: 'Name, email and a password of at least 6 characters are required.' });
     if (db.users.some(u => u.email === email)) return sendJson(res, 400, { error: 'That email is already registered.' });
-    const user = { id: uid(), name, email, passwordHash: hashPassword(password), bio: '', avatarColor: '#1877f2', isDemo: false, premium: false, createdAt: now() };
+    const user = { id: uid(), name, email, passwordHash: hashPassword(password), bio: '', avatarColor: '#1877f2', accentColor: null, isDemo: false, premium: false, createdAt: now() };
     db.users.push(user); save();
     return sendJson(res, 201, { user: publicUser(user), token: signToken(user.id) });
   }
@@ -269,9 +279,43 @@ async function handle(req, res) {
   if (p === '/api/profile' && method === 'POST') {
     const u = requireAuth(req, res); if (!u) return;
     const b = await readBody(req);
-    if (b.bio !== undefined) u.bio = String(b.bio).slice(0, 500);
+    // Premium bio limit is enforced server-side: 1000 chars for premium,
+    // 500 for free. Over-limit bios are rejected, not silently trimmed.
+    if (b.bio !== undefined) {
+      const bio = String(b.bio);
+      const limit = u.premium ? 1000 : 500;
+      if (bio.length > limit) return sendJson(res, 400, { error: `Bio is too long (max ${limit} characters${u.premium ? ' for Premium' : ' for free accounts'}).` });
+      u.bio = bio;
+    }
+    // Custom profile accent is a Premium-only perk, from the fixed safe list.
+    if (b.accentColor !== undefined && b.accentColor !== null && b.accentColor !== '') {
+      if (!u.premium) return sendJson(res, 400, { error: 'Custom profile accent colours are for Premium users only.' });
+      const accent = String(b.accentColor);
+      if (!Object.prototype.hasOwnProperty.call(ACCENT_COLORS, accent)) return sendJson(res, 400, { error: 'Accent colour must be one of: orange, gold, cyan, pink, purple, green.' });
+      u.accentColor = accent;
+    } else if (b.accentColor === '' || b.accentColor === null) {
+      u.accentColor = null;
+    }
     if (b.name) u.name = String(b.name).slice(0, 100);
     save(); return sendJson(res, 200, { user: publicUser(u) });
+  }
+
+  // Owner grant tool (manual Premium granting after a Stripe payment is
+  // confirmed in the Stripe dashboard — there is no webhook yet).
+  // Protected by PREMIUM_ADMIN_KEY via the X-Admin-Key header. If the env
+  // var is empty, this endpoint always refuses (403) rather than allowing
+  // open grants.
+  if (p === '/api/admin/premium/grant' && method === 'POST') {
+    if (!PREMIUM_ADMIN_KEY) return sendJson(res, 403, { error: 'Premium granting is not configured (PREMIUM_ADMIN_KEY is empty).' });
+    const provided = req.headers['x-admin-key'] || '';
+    const ok = provided.length === PREMIUM_ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(PREMIUM_ADMIN_KEY));
+    if (!ok) return sendJson(res, 403, { error: 'Invalid admin key.' });
+    const b = await readBody(req);
+    const email = String(b.email || '').trim().toLowerCase();
+    const target = db.users.find(x => x.email === email);
+    if (!target) return sendJson(res, 404, { error: 'User not found for that email.' });
+    target.premium = true; save();
+    return sendJson(res, 200, { user: publicUser(target) });
   }
 
   // Posts
@@ -331,12 +375,19 @@ async function handle(req, res) {
     return sendJson(res, 200, { ok: true, post: enrichPost(post, u.id) });
   }
   // Explore / Trending: engagement = likes + 2*comments + shares, highest first, hidden excluded.
+  // Premium boost (documented, not hidden): a post by a Premium author gets
+  // +2 added to its Explore score, so it ranks slightly higher. The plain
+  // feed is NOT boosted — this bonus applies to Explore only.
+  const PREMIUM_EXPLORE_BOOST = 2;
   if (p === '/api/explore' && method === 'GET') {
     const u = requireAuth(req, res); if (!u) return;
     const hiddenIds = new Set(db.hidden.filter(h => h.userId === u.id).map(h => h.postId));
-    const posts = db.posts.filter(x => !hiddenIds.has(x.id)).map(post => enrichPost(post, u.id))
-      .sort((a, b) => (b.engagement - a.engagement) || (new Date(b.createdAt) - new Date(a.createdAt)));
-    return sendJson(res, 200, { posts });
+    const posts = db.posts.filter(x => !hiddenIds.has(x.id)).map(post => {
+      const enriched = enrichPost(post, u.id);
+      const boost = enriched.author && enriched.author.premium ? PREMIUM_EXPLORE_BOOST : 0;
+      return { ...enriched, premiumBoost: boost, engagement: enriched.engagement + boost };
+    }).sort((a, b) => (b.engagement - a.engagement) || (new Date(b.createdAt) - new Date(a.createdAt)));
+    return sendJson(res, 200, { posts, premiumExploreBoost: PREMIUM_EXPLORE_BOOST });
   }
   // Events with RSVP: one RSVP per user, changeable.
   if (p === '/api/events' && method === 'GET') {

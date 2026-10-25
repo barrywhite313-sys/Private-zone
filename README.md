@@ -33,6 +33,69 @@ owner-approved step (see “Going live” below).
   3. **Ad slot:** a clearly labeled placeholder in the UI. No ad network is connected
      until the owner adds one (`AD_SLOT_ID`).
 
+## Premium — what is real, and how granting works
+
+Premium is **server-enforced**, not just a label:
+
+- **⭐ Premium badge:** `publicUser()` includes `premium: true/false`, and the UI
+  shows a ⭐ Premium badge next to Premium users' names on posts, profiles,
+  friend lists, stories, Marketplace, Watch, Events, and Flashes.
+- **Ad-free for Premium:** after login, the UI hides every `.ad-slot`
+  (top banner and in-feed card) when `me.premium` is true. Free users still
+  see the placeholder ad slots.
+- **Custom profile accent:** Premium users can set `accentColor` via
+  `POST /api/profile` — one of `orange, gold, cyan, pink, purple, green`
+  only. Free users get a 400 if they try. The accent shows as a coloured
+  left border and badge on that user's posts and profile.
+- **Longer bio:** free bios are limited to **500** characters, Premium bios
+  to **1,000** characters. Over-limit bios are rejected with a 400 by the
+  server (not silently trimmed).
+- **Explore boost:** Premium authors' posts get a **+2 boost** to their
+  Explore ranking score (`likes + 2 × comments + shares + 2 if Premium`).
+  The plain feed is not boosted, and the boost is shown on Explore posts —
+  it is documented here and in the Explore/Premium views, not hidden.
+- **Premium view:** the ⭐ Premium button now opens a Premium view (instead
+  of only opening the payment link). It lists the perks above, shows the
+  current user's status (Free / Premium), shows **“Checkout not configured
+  yet”** honestly when `STRIPE_PREMIUM_PAYMENT_LINK` is empty, and opens
+  the payment link in a new tab when it is configured. **No price is shown
+  in the app** — there is no price amount in this codebase, and the view
+  says only that the price, if any, is set by the owner in Stripe.
+
+### Manual Premium granting (no webhook yet)
+
+There is still **no Stripe webhook**. After a user pays through your Stripe
+payment link, confirm the payment in your Stripe dashboard, then grant
+Premium manually with the owner-only endpoint below. A real Stripe webhook
+that verifies the Stripe signature and flips `premium: true` for the paying
+user is still the recommended follow-up.
+
+Set this env var on the host (a long random string you generate yourself):
+
+```
+PREMIUM_ADMIN_KEY=your-own-long-random-key
+```
+
+Grant Premium for a user by email:
+
+```bash
+curl -X POST https://YOUR_APP_URL/api/admin/premium/grant \
+  -H 'Content-Type: application/json' \
+  -H 'X-Admin-Key: your-own-long-random-key' \
+  -d '{"email":"user@example.com"}'
+```
+
+Rules: if `PREMIUM_ADMIN_KEY` is empty, the endpoint always returns 403
+rather than allowing open grants. A wrong or missing `X-Admin-Key` also
+returns 403. An unknown email returns 404. A successful grant returns the
+updated public user with `premium: true`. The user must log in again (or
+refresh their session) for the badge, ad-free feed, and accent to appear.
+**Never put `PREMIUM_ADMIN_KEY` in the frontend or in a committed file.**
+
+Payouts remain record-only until Stripe Connect verification is complete,
+even for Premium users — Premium does not change Earn payout behaviour,
+and the Earn platform-fee math is unchanged.
+
 ### NOT real yet (placeholders / records only)
 - **Payouts are records only.** Cashing out an Earn collab creates a payout record
   with each person's share. **No real money is sent.** Real payouts require the owner
@@ -119,6 +182,7 @@ private-zone-live/
 | Notifications | `GET /api/notifications`, `POST /api/notifications/read-all` |
 | Earn | `GET+POST /api/earn/collabs`, `POST /api/earn/collabs/:id/cashout`, `GET /api/earn/payouts` |
 | Video calls | `POST /api/calls`, `GET /api/calls/incoming`, `GET /api/calls/:id`, `POST /api/calls/:id/signal`, `GET /api/calls/:id/signal?since=N`, `POST /api/calls/:id/end` |
+| Premium / admin | `GET /api/config` (includes `currentUserPremium` when called with a Bearer token), `POST /api/admin/premium/grant` (header `X-Admin-Key: PREMIUM_ADMIN_KEY`) |
 
 ### Earn split math (worked example)
 - Sources total: **$100**

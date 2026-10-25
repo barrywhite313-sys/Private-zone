@@ -84,7 +84,7 @@
     </div>
 
     <div id="view-explore" class="view hidden">
-      <div class="card"><h2>Explore — Trending</h2><p class="muted">Ranked by engagement: likes + 2 × comments + shares. Posts you hid are excluded.</p></div>
+      <div class="card"><h2>Explore — Trending</h2><p class="muted">Ranked by engagement: likes + 2 × comments + shares. Posts you hid are excluded. Premium authors get a +2 boost to their Explore score, so they rank slightly higher — that boost is shown on their posts.</p></div>
       <div id="exploreList"></div>
     </div>
 
@@ -178,8 +178,41 @@
     <div id="view-profile" class="view hidden">
       <div class="card"><h2>My profile</h2><div id="profileInfo"></div>
         <input id="bioInput" placeholder="Bio…"><button id="bioBtn">Save bio</button>
+        <p id="bioLimitNote" class="muted"></p>
       </div>
       <div class="card"><h2>Notifications</h2><button id="readAllBtn">Mark all read</button><div id="notifList"></div></div>
+    </div>
+
+    <div id="view-premium" class="view hidden">
+      <div class="card">
+        <h2>⭐ Premium</h2>
+        <p id="premiumStatus" class="muted"></p>
+        <h3>What Premium gives you</h3>
+        <ul>
+          <li><strong>⭐ Premium badge</strong> next to your name on posts, your profile, and friend lists.</li>
+          <li><strong>Ad-free feed</strong> — the ad slots in the feed are hidden for Premium users.</li>
+          <li><strong>Custom profile accent</strong> — pick a colour (orange, gold, cyan, pink, purple, or green) that shows as a coloured border and badge on your profile and posts. Premium only.</li>
+          <li><strong>Longer bio</strong> — up to 1,000 characters, instead of 500 for free accounts.</li>
+          <li><strong>Explore boost</strong> — your posts get a +2 boost to their Explore ranking score, so they rank slightly higher. This boost is shown on your posts and is not hidden.</li>
+        </ul>
+        <p class="muted">No price is shown here unless the owner supplies one. The price, if any, is set by the owner in Stripe.</p>
+        <div id="premiumCheckout"></div>
+        <p id="premiumMsg" class="msg"></p>
+      </div>
+      <div class="card">
+        <h2>Your accent colour (Premium only)</h2>
+        <p class="muted">Free accounts cannot set an accent colour — the server will reject it.</p>
+        <select id="premiumAccent">
+          <option value="">No accent</option>
+          <option value="orange">Orange</option>
+          <option value="gold">Gold</option>
+          <option value="cyan">Cyan</option>
+          <option value="pink">Pink</option>
+          <option value="purple">Purple</option>
+          <option value="green">Green</option>
+        </select>
+        <button id="premiumAccentBtn">Save accent colour</button>
+      </div>
     </div>
   </section>
 </main>
