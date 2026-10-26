@@ -1,6 +1,6 @@
 // Private Zone frontend — vanilla JS, no build step.
 let token = localStorage.getItem('pz_token') || '';
-let me = null, config = null, currentChatPeer = null, currentCall = null, pc = null, localStream = null, signalIndex = -1, signalTimer = null;
+let me = null, config = null, currentChatPeer = null, currentCall = null, pc = null, localStream = null, signalIndex = -1, signalTimer = null, clubTimer = null;
 const $ = id => document.getElementById(id);
 async function api(path, method = 'GET', body) {
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -17,6 +17,8 @@ function showView(name) {
   if (name === 'events') loadEvents();
   if (name === 'flashes') loadFlashes();
   if (name === 'friends') loadFriends();
+  if (name === 'club') { loadClub(); if (clubTimer) clearInterval(clubTimer); clubTimer = setInterval(loadClub, 5000); }
+  else if (clubTimer) { clearInterval(clubTimer); clubTimer = null; }
   if (name === 'chats') loadChats();
   if (name === 'earn') loadEarn();
   if (name === 'marketplace') loadMarketplace();
@@ -176,6 +178,56 @@ window.openFlash = async id => {
     loadFlashes();
   } catch (e) { alert(e.message); loadFlashes(); }
 };
+
+async function loadClub() {
+  const d = await api('/api/club');
+  $('clubAvatarEmoji').innerHTML = d.avatarEmojis.map(e => `<option value="${e}"${me.avatarEmoji === e ? ' selected' : ''}>${e}</option>`).join('');
+  $('clubAvatarColor').value = me.avatarColor || '#1877f2';
+  $('clubMembers').innerHTML = d.members.map(m => `<div class="club-avatar" style="background:${esc(m.avatarColor || '#1877f2')}">
+    <div class="club-emoji">${esc(m.avatarEmoji || '😀')}</div>
+    <strong>${esc(m.name)}</strong> ${premiumBadge(m)}
+    <div class="muted">${m.id === me.id ? 'You' : (m.inClub ? 'In the Club 🟢' : 'Away')} </div>
+    ${m.id !== me.id ? `<div>${d.actions.map(a => `<button onclick="clubInteract('${m.id}', '${a}')">${a}</button>`).join(' ')}</div>` : ''}
+  </div>`).join('') || '<p class="muted">No friends in the Club yet — add friends first, then they will meet you here.</p>';
+  $('clubMessages').innerHTML = d.messages.map(m => `<div><strong>${esc(m.author?.name)}:</strong> ${esc(m.text)} <span class="muted">${new Date(m.createdAt).toLocaleTimeString()}</span></div>`).join('') || '<p class="muted">No Club chat yet — say hi to your friends.</p>';
+  const np = d.music.nowPlaying;
+  $('clubNowPlaying').innerHTML = np ? `<p><strong>🎧 Now playing:</strong> ${esc(np.title)}${np.artist ? ' — ' + esc(np.artist) : ''} ${np.playing ? '(playing)' : '(paused)'} ${np.audioUrl ? '' : '<span class="muted">— no audio link, text only</span>'}</p><button onclick="clubMusicPause()">Pause</button> <button onclick="clubMusicSkip()">Skip</button>` : '<p class="muted">Nothing playing yet — add a track and press Play.</p>';
+  const audio = $('clubAudio');
+  if (np && np.audioUrl && np.playing && audio.src !== np.audioUrl) { audio.src = np.audioUrl; audio.play().catch(() => {}); }
+  if (np && !np.playing) audio.pause();
+  $('clubQueue').innerHTML = d.music.queue.map(t => `<div>${esc(t.title)}${t.artist ? ' — ' + esc(t.artist) : ''} <button onclick="clubMusicPlay('${t.id}')">▶ Play</button></div>`).join('') || '<p class="muted">Queue is empty.</p>';
+  $('clubGameOpponent').innerHTML = d.members.filter(m => m.id !== me.id).map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('') || '<option value="">No friends yet</option>';
+  $('clubGames').innerHTML = d.games.map(g => {
+    const x = g.players.find(p => p.userId === me.id);
+    const board = g.board.map((cell, i) => `<button class="club-cell" onclick="clubMove('${g.id}', ${i})">${cell || '&nbsp;'}</button>`).join('');
+    const status = g.status === 'finished' ? (g.winnerId ? (g.winnerId === me.id ? 'You won! 🏆' : 'You lost.') : 'Draw.') : (g.myTurn ? 'Your turn' : 'Waiting for your friend…');
+    return `<div class="card"><strong>Tic-tac-toe</strong> <span class="muted">${status}</span><div class="club-board">${board}</div></div>`;
+  }).join('') || '<p class="muted">No Club games yet.</p>';
+  if (d.interactions.length) {
+    const last = d.interactions[d.interactions.length - 1];
+    $('clubInteractMsg').textContent = `${last.from?.name} ${last.action}d ${last.to?.name} in the Club.`;
+  }
+}
+window.clubInteract = async (toId, action) => { try { await api('/api/club/interact', 'POST', { toId, action }); $('clubInteractMsg').textContent = `You ${action}d them!`; loadClub(); } catch (e) { $('clubInteractMsg').textContent = e.message; } };
+window.clubMusicPlay = async id => { try { await api('/api/club/music/play', 'POST', { trackId: id }); loadClub(); } catch (e) { $('clubMusicMsg').textContent = e.message; } };
+window.clubMusicPause = async () => { try { await api('/api/club/music/pause', 'POST', {}); loadClub(); } catch (e) { $('clubMusicMsg').textContent = e.message; } };
+window.clubMusicSkip = async () => { try { await api('/api/club/music/skip', 'POST', {}); loadClub(); } catch (e) { $('clubMusicMsg').textContent = e.message; } };
+window.clubMove = async (id, cell) => { try { await api(`/api/club/games/${id}/move`, 'POST', { cell }); loadClub(); } catch (e) { $('clubGameMsg').textContent = e.message; } };
+$('clubAvatarBtn').onclick = async () => {
+  try { const d = await api('/api/profile', 'POST', { avatarEmoji: $('clubAvatarEmoji').value, avatarColor: $('clubAvatarColor').value }); me = d.user; $('clubAvatarMsg').textContent = 'Avatar saved.'; loadClub(); }
+  catch (e) { $('clubAvatarMsg').textContent = e.message; }
+};
+$('clubChatSend').onclick = async () => { try { await api('/api/club/message', 'POST', { text: $('clubChatInput').value }); $('clubChatInput').value = ''; loadClub(); } catch (e) { alert(e.message); } };
+$('clubRefreshBtn').onclick = () => loadClub();
+$('clubTrackBtn').onclick = async () => {
+  try { await api('/api/club/music', 'POST', { title: $('clubTrackTitle').value, artist: $('clubTrackArtist').value, audioUrl: $('clubTrackUrl').value }); $('clubTrackTitle').value = ''; $('clubTrackArtist').value = ''; $('clubTrackUrl').value = ''; $('clubMusicMsg').textContent = 'Track added to the Club queue.'; loadClub(); }
+  catch (e) { $('clubMusicMsg').textContent = e.message; }
+};
+$('clubGameBtn').onclick = async () => {
+  try { await api('/api/club/games', 'POST', { opponentId: $('clubGameOpponent').value }); $('clubGameMsg').textContent = 'Challenge sent — your friend will see it in the Club.'; loadClub(); }
+  catch (e) { $('clubGameMsg').textContent = e.message; }
+};
+$('clubDiceBtn').onclick = async () => { try { const d = await api('/api/club/dice', 'POST', {}); $('clubGameMsg').textContent = `You rolled a ${d.roll}!`; loadClub(); } catch (e) { $('clubGameMsg').textContent = e.message; } };
 
 async function loadFriends() {
   const f = (await api('/api/friends')).friends;

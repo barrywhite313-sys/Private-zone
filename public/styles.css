@@ -63,6 +63,12 @@ select{width:100%;padding:12px;margin:6px 0;border:1px solid #3a3a46;border-radi
 .flash-item{animation:pz-fade-up .45s ease both}
 .flash-opened{animation:pz-pop .3s ease;border:2px solid #ff6a00}
 .ad-slot{animation:pz-glow 4s ease-in-out infinite}
+.club-grid{display:flex;flex-wrap:wrap;gap:12px}
+.club-avatar{flex:1 1 140px;max-width:200px;text-align:center;padding:14px;border-radius:18px;color:#fff}
+.club-avatar .club-emoji{font-size:48px;line-height:1}
+.club-avatar button{background:#111;color:#fff;border:1px solid #fff3;padding:6px 10px;min-height:36px;font-size:13px}
+.club-board{display:grid;grid-template-columns:repeat(3,60px);gap:6px;margin-top:10px}
+.club-cell{width:60px;height:60px;font-size:28px;font-weight:900;background:#23232b;color:#fff}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
 }

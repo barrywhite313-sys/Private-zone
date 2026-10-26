@@ -151,6 +151,34 @@ and the Earn platform-fee math is unchanged.
   and letting the server re-seed, then removing demo rows — or start with an empty
   data file (see “Data storage”).
 
+## Club — friends-only meet-up room
+
+One shared room for you + your accepted friends only (the **Club** tab):
+
+- **One Club chat** — messages are filtered server-side to you and your
+  accepted friends. A user who is not your friend never sees your Club
+  messages, and cannot interact with your avatar or join your games.
+- **Avatars** — pick an avatar emoji face and colour in the Club tab
+  (`POST /api/profile` with `avatarEmoji` / `avatarColor`). The room shows
+  each friend's avatar, with "In the Club" for friends who visited in the
+  last 5 minutes. Click a friend's avatar actions to **wave, poke, hug,
+  dance, or cheers** — the friend gets a notification.
+- **Music** — a shared queue (`POST /api/club/music`, play / pause / skip).
+  Anyone in the Club can add a track (title, artist, and an audio URL you
+  supply) and DJ. There is **no built-in music catalogue and no Spotify
+  integration**: a track with no audio URL shows as now-playing text only
+  and plays no sound.
+- **Games** — tic-tac-toe against a friend (`POST /api/club/games`, then
+  `POST /api/club/games/:id/move` with turn enforcement and win/draw
+  detection), plus a dice roll that posts to the Club chat
+  (`POST /api/club/dice`).
+
+Endpoints: `GET /api/club` (members, messages, interactions, games,
+music queue + now playing), `POST /api/club/message`,
+`POST /api/club/interact`, `POST /api/club/music`,
+`POST /api/club/music/play|pause|skip`, `POST /api/club/games`,
+`POST /api/club/games/:id/move`, `POST /api/club/dice`.
+
 ## Run it locally — one command
 
 Requirements: Node.js 18+ (tested on Node 24). No dependencies, no `npm install` needed.

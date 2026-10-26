@@ -55,6 +55,7 @@ function seedData() {
     ],
     likes: [], comments: [], saved: [], hidden: [], shares: [],
     reactions: [], pollVotes: [], events: [], rsvps: [], flashes: [],
+    clubMessages: [], clubInteractions: [], clubGames: [], clubMusicQueue: [], clubNowPlaying: [],
     stories: [
       { id: uid(), userId: maya.id, text: 'Demo story: Sunday dinner prep', imageUrl: '', createdAt: now(), isDemo: true },
       { id: uid(), userId: dre.id, text: 'Demo story: courtside', imageUrl: '', createdAt: now(), isDemo: true },
@@ -185,6 +186,44 @@ const FLASH_TTL_MS = 24 * 3600 * 1000;
 function flashExpired(f) { return Date.now() - new Date(f.createdAt).getTime() > FLASH_TTL_MS; }
 function flashExpiresAt(f) { return new Date(new Date(f.createdAt).getTime() + FLASH_TTL_MS).toISOString(); }
 function flashMsLeft(f) { return Math.max(0, new Date(f.createdAt).getTime() + FLASH_TTL_MS - Date.now()); }
+
+// ---------- Club: friends-only meet-up room ----------
+// The Club is one shared room for you + your accepted friends only.
+// Chat, music queue, games and avatar interactions are filtered to that
+// circle: a stranger (not your friend, and not you) never sees your Club
+// messages, and cannot interact with your avatar or join your games.
+// Music is a shared queue of tracks users link (title/artist + an audio
+// URL they supply, e.g. a free/public audio link). There is no built-in
+// music catalogue and no Spotify integration here, so a track with no
+// audio URL shows as "now playing" text only and plays nothing.
+const CLUB_AVATAR_EMOJIS = ['😀', '😎', '🔥', '🎤', '🎧', '🏀', '🎮', '👑', '🦁', '🐯', '🌟', '💎', '🚀', '🎉'];
+const CLUB_ACTIONS = ['wave', 'poke', 'hug', 'dance', 'cheers'];
+const CLUB_ACTION_EMOJI = { wave: '👋', poke: '👉', hug: '🤗', dance: '💃', cheers: '🥂' };
+function clubMemberIds(u) {
+  const ids = new Set([u.id]);
+  for (const f of db.friends.filter(x => x.status === 'accepted')) {
+    if (f.fromId === u.id) ids.add(f.toId);
+    if (f.toId === u.id) ids.add(f.fromId);
+  }
+  return ids;
+}
+function clubMembers(u) {
+  return [...clubMemberIds(u)].map(id => {
+    const x = db.users.find(y => y.id === id);
+    if (!x) return null;
+    const pub = publicUser(x);
+    return { ...pub, avatarEmoji: x.avatarEmoji || '😀', inClub: Boolean(x.clubLastSeen && Date.now() - new Date(x.clubLastSeen).getTime() < 5 * 60 * 1000) };
+  }).filter(Boolean);
+}
+function clubGameView(g, userId) {
+  const x = g.players.find(p => p.userId === userId);
+  return { ...g, mySymbol: x ? x.symbol : null, myTurn: g.status === 'active' && g.turnUserId === userId };
+}
+function clubTicTacToeWinner(board) {
+  const lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+  for (const [a, b, c] of lines) if (board[a] && board[a] === board[b] && board[a] === board[c]) return board[a];
+  return board.every(Boolean) ? 'draw' : null;
+}
 
 // ---------- http helpers ----------
 function sendJson(res, status, obj) {
@@ -344,7 +383,7 @@ async function handle(req, res) {
     const name = String(b.name || '').trim(), email = String(b.email || '').trim().toLowerCase(), password = String(b.password || '');
     if (!name || !email || password.length < 6) return sendJson(res, 400, { error: 'Name, email and a password of at least 6 characters are required.' });
     if (db.users.some(u => u.email === email)) return sendJson(res, 400, { error: 'That email is already registered.' });
-    const user = { id: uid(), name, email, passwordHash: hashPassword(password), bio: '', avatarColor: '#1877f2', accentColor: null, isDemo: false, premium: false, createdAt: now() };
+    const user = { id: uid(), name, email, passwordHash: hashPassword(password), bio: '', avatarColor: '#1877f2', avatarEmoji: '😀', isDemo: false, premium: false, createdAt: now() };
     db.users.push(user); save();
     return sendJson(res, 201, { user: publicUser(user), token: signToken(user.id) });
   }
@@ -393,6 +432,15 @@ async function handle(req, res) {
       u.accentColor = null;
     }
     if (b.name) u.name = String(b.name).slice(0, 100);
+    // Club avatar: an emoji face + a colour, from the fixed safe lists.
+    if (b.avatarEmoji !== undefined) {
+      if (!CLUB_AVATAR_EMOJIS.includes(String(b.avatarEmoji))) return sendJson(res, 400, { error: 'Avatar emoji is not one of the Club avatar choices.' });
+      u.avatarEmoji = String(b.avatarEmoji);
+    }
+    if (b.avatarColor !== undefined) {
+      if (!/^#[0-9a-fA-F]{6}$/.test(String(b.avatarColor))) return sendJson(res, 400, { error: 'Avatar colour must be a hex colour like #ff6a00.' });
+      u.avatarColor = String(b.avatarColor);
+    }
     save(); return sendJson(res, 200, { user: publicUser(u) });
   }
 
@@ -594,6 +642,118 @@ async function handle(req, res) {
       if (!db.hidden.some(h => h.postId === post.id && h.userId === u.id)) db.hidden.push({ postId: post.id, userId: u.id });
     }
     save(); return sendJson(res, 200, { ok: true });
+  }
+  // Club
+  if (p === '/api/club' && method === 'GET') {
+    const u = requireAuth(req, res); if (!u) return;
+    u.clubLastSeen = now(); save();
+    const ids = clubMemberIds(u);
+    const messages = arr('clubMessages').filter(m => ids.has(m.userId)).slice(-100).map(m => ({ ...m, author: publicUser(db.users.find(x => x.id === m.userId)) }));
+    const interactions = arr('clubInteractions').filter(i => ids.has(i.fromId) && ids.has(i.toId)).slice(-50).map(i => ({ ...i, from: publicUser(db.users.find(x => x.id === i.fromId)), to: publicUser(db.users.find(x => x.id === i.toId)) }));
+    const games = arr('clubGames').filter(g => g.players.some(pl => pl.userId === u.id)).slice().reverse().map(g => clubGameView(g, u.id));
+    const queue = arr('clubMusicQueue').filter(t => ids.has(t.userId));
+    const nowPlaying = arr('clubNowPlaying')[0] || null;
+    return sendJson(res, 200, { members: clubMembers(u), messages, interactions, games, music: { queue, nowPlaying }, avatarEmojis: CLUB_AVATAR_EMOJIS, actions: CLUB_ACTIONS });
+  }
+  if (p === '/api/club/message' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const text = String(b.text || '').trim();
+    if (!text) return sendJson(res, 400, { error: 'Club message cannot be empty.' });
+    if (text.length > 500) return sendJson(res, 400, { error: 'Club message is too long (max 500 characters).' });
+    const msg = { id: uid(), userId: u.id, text, createdAt: now() };
+    arr('clubMessages').push(msg); save();
+    return sendJson(res, 201, { message: { ...msg, author: publicUser(u) } });
+  }
+  if (p === '/api/club/interact' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const toId = String(b.toId || '');
+    const action = String(b.action || '');
+    if (!CLUB_ACTIONS.includes(action)) return sendJson(res, 400, { error: 'Unknown Club interaction.' });
+    if (toId === u.id) return sendJson(res, 400, { error: 'You cannot interact with your own avatar.' });
+    const target = db.users.find(x => x.id === toId);
+    if (!target) return sendJson(res, 404, { error: 'User not found' });
+    if (!areFriends(u.id, toId)) return sendJson(res, 403, { error: 'Club interactions are for friends only.' });
+    const inter = { id: uid(), fromId: u.id, toId, action, createdAt: now() };
+    arr('clubInteractions').push(inter); save();
+    if (!target.isDemo) notify(toId, 'club', `${u.name} ${CLUB_ACTION_EMOJI[action]} ${action}d you in the Club.`, inter.id);
+    return sendJson(res, 201, { interaction: inter });
+  }
+  if (p === '/api/club/dice' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const roll = 1 + Math.floor(Math.random() * 6);
+    const msg = { id: uid(), userId: u.id, text: `🎲 rolled a ${roll}!`, createdAt: now() };
+    arr('clubMessages').push(msg); save();
+    return sendJson(res, 201, { roll, message: { ...msg, author: publicUser(u) } });
+  }
+  if (p === '/api/club/music' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const title = String(b.title || '').trim();
+    if (!title) return sendJson(res, 400, { error: 'Track title is required.' });
+    if (arr('clubMusicQueue').length >= 50) return sendJson(res, 400, { error: 'Music queue is full (50 tracks).' });
+    const track = { id: uid(), userId: u.id, title: title.slice(0, 200), artist: String(b.artist || '').slice(0, 200), audioUrl: String(b.audioUrl || '').slice(0, 500), createdAt: now() };
+    arr('clubMusicQueue').push(track); save();
+    return sendJson(res, 201, { track });
+  }
+  if (p === '/api/club/music/play' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const track = arr('clubMusicQueue').find(t => t.id === String(b.trackId || ''));
+    if (!track) return sendJson(res, 404, { error: 'Track not found in the Club queue.' });
+    const ids = clubMemberIds(u);
+    if (!ids.has(track.userId)) return sendJson(res, 403, { error: 'That track is not in your Club.' });
+    arr('clubNowPlaying').length = 0; arr('clubNowPlaying').push({ ...track, playing: true, startedBy: u.id, startedAt: now() }); save();
+    return sendJson(res, 200, { nowPlaying: arr('clubNowPlaying')[0] });
+  }
+  if (p === '/api/club/music/pause' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const cur = arr('clubNowPlaying')[0];
+    if (!cur) return sendJson(res, 404, { error: 'Nothing is playing in the Club.' });
+    cur.playing = false; save();
+    return sendJson(res, 200, { nowPlaying: cur });
+  }
+  if (p === '/api/club/music/skip' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const cur = arr('clubNowPlaying')[0];
+    if (cur) { const qi = arr('clubMusicQueue').findIndex(t => t.id === cur.id); if (qi >= 0) arr('clubMusicQueue').splice(qi, 1); }
+    const next = arr('clubMusicQueue')[0] || null;
+    arr('clubNowPlaying').length = 0;
+    if (next) arr('clubNowPlaying').push({ ...next, playing: true, startedBy: u.id, startedAt: now() });
+    save();
+    return sendJson(res, 200, { nowPlaying: arr('clubNowPlaying')[0] || null });
+  }
+  if (p === '/api/club/games' && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const b = await readBody(req);
+    const opponentId = String(b.opponentId || '');
+    const target = db.users.find(x => x.id === opponentId);
+    if (!target) return sendJson(res, 404, { error: 'User not found' });
+    if (!areFriends(u.id, opponentId)) return sendJson(res, 403, { error: 'Club games are for friends only.' });
+    const game = { id: uid(), kind: 'tic-tac-toe', players: [{ userId: u.id, symbol: 'X' }, { userId: opponentId, symbol: 'O' }], board: Array(9).fill(null), turnUserId: u.id, status: 'active', winnerId: null, createdAt: now() };
+    arr('clubGames').push(game); save();
+    if (!target.isDemo) notify(opponentId, 'club', `${u.name} challenged you to tic-tac-toe in the Club.`, game.id);
+    return sendJson(res, 201, { game: clubGameView(game, u.id) });
+  }
+  const clubGameMatch = p.match(/^\/api\/club\/games\/([^/]+)\/move$/);
+  if (clubGameMatch && method === 'POST') {
+    const u = requireAuth(req, res); if (!u) return;
+    const game = arr('clubGames').find(g => g.id === clubGameMatch[1]);
+    if (!game) return sendJson(res, 404, { error: 'Game not found' });
+    if (game.status !== 'active') return sendJson(res, 400, { error: 'That game is already finished.' });
+    if (game.turnUserId !== u.id) return sendJson(res, 403, { error: 'It is not your turn.' });
+    const b = await readBody(req);
+    const cell = Number(b.cell);
+    if (!Number.isInteger(cell) || cell < 0 || cell > 8 || game.board[cell]) return sendJson(res, 400, { error: 'That square is not available.' });
+    const mePlayer = game.players.find(pl => pl.userId === u.id);
+    game.board[cell] = mePlayer.symbol;
+    const result = clubTicTacToeWinner(game.board);
+    if (result === 'X' || result === 'O') { game.status = 'finished'; game.winnerId = u.id; }
+    else if (result === 'draw') { game.status = 'finished'; game.winnerId = null; }
+    else { const other = game.players.find(pl => pl.userId !== u.id); game.turnUserId = other.userId; }
+    save();
+    return sendJson(res, 200, { game: clubGameView(game, u.id) });
   }
   // Stories
   if (p === '/api/stories' && method === 'GET') {

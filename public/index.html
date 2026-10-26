@@ -14,6 +14,7 @@
     <button data-view="explore">Explore</button>
     <button data-view="events">Events</button>
     <button data-view="flashes">Flashes</button>
+    <button data-view="club">Club</button>
     <button data-view="friends">Friends</button>
     <button data-view="chats">Chats</button>
     <button data-view="earn">Earn</button>
@@ -119,6 +120,52 @@
         <div id="flashInbox"></div>
       </div>
       <div class="card"><h2>Flashes you sent</h2><div id="flashSent"></div></div>
+    </div>
+
+    <div id="view-club" class="view hidden">
+      <div class="card">
+        <h2>🎉 Club — meet up with your friends</h2>
+        <p class="muted">This room is only for you and your accepted friends — one shared chat, shared music, games, and avatars you can interact with. Strangers cannot see this room or join in.</p>
+        <h3>In the Club right now</h3>
+        <div id="clubMembers" class="club-grid"></div>
+        <p id="clubInteractMsg" class="msg"></p>
+      </div>
+      <div class="card">
+        <h3>Your avatar</h3>
+        <p class="muted">Pick an avatar face and colour — this is how you appear in the Club room.</p>
+        <select id="clubAvatarEmoji"></select>
+        <input id="clubAvatarColor" type="color" value="#1877f2">
+        <button id="clubAvatarBtn">Save avatar</button>
+        <p id="clubAvatarMsg" class="msg"></p>
+      </div>
+      <div class="card">
+        <h3>Club chat</h3>
+        <div id="clubMessages"></div>
+        <input id="clubChatInput" placeholder="Message the Club…">
+        <button id="clubChatSend">Send</button>
+        <button id="clubRefreshBtn">Refresh</button>
+      </div>
+      <div class="card">
+        <h3>🎧 Club music — shared queue</h3>
+        <p class="muted">Anyone in the Club can add a track and DJ. Add a title/artist, and an audio link if you have one (for example a free or public audio link) — without a link, the track shows as now-playing text only and plays no sound. No built-in music catalogue or Spotify link is included.</p>
+        <div id="clubNowPlaying"></div>
+        <audio id="clubAudio" controls style="width:100%"></audio>
+        <input id="clubTrackTitle" placeholder="Track title">
+        <input id="clubTrackArtist" placeholder="Artist (optional)">
+        <input id="clubTrackUrl" placeholder="Audio URL (optional)">
+        <button id="clubTrackBtn">Add to queue</button>
+        <div id="clubQueue"></div>
+        <p id="clubMusicMsg" class="msg"></p>
+      </div>
+      <div class="card">
+        <h3>🎮 Club games</h3>
+        <p class="muted">Challenge a friend to tic-tac-toe, or roll the dice in the Club chat.</p>
+        <select id="clubGameOpponent"></select>
+        <button id="clubGameBtn">Challenge to tic-tac-toe</button>
+        <button id="clubDiceBtn">🎲 Roll the dice</button>
+        <p id="clubGameMsg" class="msg"></p>
+        <div id="clubGames"></div>
+      </div>
     </div>
 
     <div id="view-friends" class="view hidden">
